@@ -136,7 +136,7 @@ def calc_run_time(start_time, end_time):
     result = '{0} days, {1} hours, {2} mins and {3} secs'.format(
         days, hours, minutes, seconds
     )
-    return results
+    return result
 
 
 def main(args):
