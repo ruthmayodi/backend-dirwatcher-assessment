@@ -163,7 +163,7 @@ def main(args):
     while not exit_flag:
         try:
             files_dict = watch_dict(
-                files_dict, watch_dir, files_ext, magic_text
+                files_dict, watch_dir, file_ext, magic_text
             )
         except Exception as e:
             logger.exception(e)
