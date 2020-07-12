@@ -1,183 +1,149 @@
-__author__ = "ruthmayodi, with the help of Howard Post"
-import logging 
-import time
-import signal
-import argparse
+__author__ = "ruthmayodi with the help of Nikal Morgan"
+import logging
 import sys
-
-from os import listdir
-from os.path import isfile, join, splitext
-from collections import defaultdict
-
+import signal
+import time
+import argparse
+import os
+import errno
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-formatter = logging.Formatter(
-    '%(asctime)s:%(funcName)s:%(levelname)s:%(message)s'
-)
-stream_handler = logging.StreamHandler(sys.stdout)
-stream_handler.setLevel(logging.INFO)
-stream_handler.setFormatter(formatter)
-logger.addHandler(stream_handler)
-
-# global variables
+watched_files = {}
 exit_flag = False
-banner_text = '\n' + '-' * 30 + '\n'
+
+
+def read_file(path, start_line, search_text):
+    """ This function reads individual file and 
+    looks for searched text within file"""
+    line_number = 0
+    with open(path) as f:
+        for line_number, line in enumerate(f):
+            if line_number >= start_line:
+                if search_text in line:
+                    logger.info(
+                        f"Match found for {search_text} "
+                        f"found on line {line_number+1} in {path}"
+                                )
+    return line_number + 1
+
+
+def watch_dir(args):
+    """Function gets ran based on args, builds list
+    of current files and passes them along to add,delete and read detections"""
+    file_list = os.listdir(args.watchDir)
+    detect_added_files(file_list, args.fileExt)
+    detect_removed_files(file_list)
+    for f in watched_files:
+        path = os.path.join(args.watchDir, f)
+        watched_files[f] = read_file(
+            path,
+            watched_files[f],
+            args.search_text
+        )
+    return watched_files
+
+
+def detect_added_files(file_list, ext):
+    """loops through the files list and checks to see
+    if there are any new files"""
+    global watched_files
+    for f in file_list:
+        if f.endswith(ext) and f not in watched_files:
+            watched_files[f] = 0
+            logger.info(f"{f} added to watchlist.")
+    return file_list
+
+
+def detect_removed_files(file_list):
+    """Checks the directory if a given file was deleted"""
+    global watched_files
+    for f in list(watched_files):
+        if f not in file_list:
+            logger.info(f"{f} removed from watchlist.")
+            del watched_files[f]
+    return file_list
 
 
 def signal_handler(sig_num, frame):
-    """handler for system signals"""
+    """
+    This is a handler for SIGTERM and SIGINT.
+    Other signals can be mapped here as well (SIGHUP?)
+    Basically, it just sets a global flag, and main() will exit its loop
+    if the signal is trapped.
+    :param sig_num: The integer signal number that was trapped from the OS.
+    :param frame: Not used
+    :return None
+    """
+    # log the associated signal name
     global exit_flag
     logger.warning('Received ' + signal.Signals(sig_num).name)
     exit_flag = True
 
 
-def dect_added_files(files_dict, only_files, file_ext):
-    """loops through the files list and checks to see
-    if there are any new files"""
-    for file in only_files:
-        filename, file_extension = splitext(file)
-        if file_extension == file_ext:
-            if file not in files_dict.keys():
-                logger.info("new file detected:{}".format(file))
-                files_dict[file] = 0
-    return files_dict
-
-
-def dect_removed_files(files_dict, only_files):
-    """loops through the files list and checks to see
-    if any files have been removed"""
-    removed_files = []
-    for file in files_dict.keys():
-        if file not in only_files:
-            logger.info("deleted file detected:{}".format(file))
-            removed_files.append(file)
-    for file in removed_files:
-        del files_dict[file]
-    return files_dict
-
-
-def read_files(file_path, line_num, text, files_dict, file):
-    """ This function reads individual file and 
-    looks for peculiar text within file"""
-    current_line = 1
-    with open(file_path) as f:
-        for line in f:
-            if current_line >= line_num:
-                if text in line:
-                    logger.info(
-                        'peculiar text found in file {0} at line number {1}'
-                        .format(file, current_line)
-                    )
-            current_line +=1
-    files_dict[file] = current_line
-    return files_dict
-
-
-def watch_dict(files_dict, watch_dir, file_ext, search_text):
-    """Function gets ran based on polling interval, builds list
-    of current files and passes them along to add and delete detections"""
-    try:
-        only_files = [f for f in listdir(watch_dir)
-                      if isfile(join(watch_dir, f))]
-    except OSError as err:
-        logger.error(err)
-    else:
-        try:
-            files_dict = dect_added_files(files_dict, only_files, file_ext)
-            files_dict = dect_removed_files(files_dict, only_files)
-        except Exception as e:
-            logger.exception(e)
-        for k, v in files_dict.items():
-            try:
-                filename, file_extension = splitext(k)
-            except Exception as e:
-                logger.exception(e)
-            else:
-                file = join(watch_dir, k)
-                if file_ext == file_extension:
-                    try:
-                        files_dict = read_files(
-                            file, v, search_text, files_dict, k
-                        )
-                    except Exception as e:
-                        logger.exception(e)
-    finally:
-        return files_dict
-
-
 def create_parser():
-    """ Creates parser to add command line arguments"""
+    """Create an argument parser object"""
     parser = argparse.ArgumentParser(
-        description='watches a directory for files that contain search text'
+        description="Watches a directory of text files for a magic string"
     )
-    parser.add_argument(
-        '-p', '--pollint', help='interval which directory is scanned',
-         default=1, type=int
-    )
-    parser.add_argument(
-        '-st', '--searchText', help='text that will be searched'
-    )
-    parser.add_argument(
-        '-ext', '--fileExt', help='extension of files to search'
-    )
-    parser.add_argument(
-        '-wd', '--watchDir', help='directory to watch'
-    )
+    parser.add_argument('watchDir', help='directory to watch')
+    parser.add_argument('search_text', help='text that will be searched')
+    parser.add_argument('-p',
+                        '--pollint',
+                        help='interval which directory is scanned',
+                        type=float,
+                        default=1.0)
+    parser.add_argument( '-ext', '--fileExt', help='extension of files to search',
+                        type=str,
+                        default='.txt')
     return parser
-
-
-def calc_run_time(start_time, end_time):
-    """function that calculates running time"""
-    total_time = end_time - start_time
-    days = total_time // 86400
-    hours = total_time // 3600 % 24
-    minutes = total_time // 60 % 60
-    seconds = total_time % 60
-    result = '{0} days, {1} hours, {2} mins and {3} secs'.format(
-        days, hours, minutes, seconds
-    )
-    return result
 
 
 def main(args):
     """Used to initialize program and start watch directory"""
-    global exit_flag
+    parser = create_parser()
+    parsed_args = parser.parse_args(args)
+    polling_interval = parsed_args.pollint
+    logging.basicConfig(
+        format='%(asctime)s.%(msecs)03d %(name)-12s '
+               '%(levelname)-8s %(message)s',
+        datefmt='%Y-%m-%d &%H:%M:%S'
+    )
+    logger.setLevel(logging.DEBUG)
     start_time = time.time()
-    logger.info('{0} dirwatcher.py started {1}'.format(
-        banner_text, banner_text
-    ))
-    files_dict = defaultdict(list)
-    try:
-        parser = create_parser()
-        ns = parser.parse_args(args)
-    except Exception as e:
-        logger.exception(e)
+    logger.info(
+        '\n'
+        '-------------------------------------------------\n'
+        f'   Running {__file__}\n'
+        f'   Started on {start_time:.1f}\n'
+        '-------------------------------------------------\n'
+    )
+    
+    # Hook into these two signals from the OS
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    if not ns:
-        logger.exception('arguments not passed correctly')
-    magic_text = ns.searchText
-    polling_interval = ns.pollint
-    file_ext = ns.fileExt
-    watch_dir = ns.watchDir
+    
     while not exit_flag:
         try:
-            files_dict = watch_dict(
-                files_dict, watch_dir, file_ext, magic_text
-            )
+            watch_dir(parsed_args)
+        except OSError as e:
+            if e.errno == errno.ENOENT:
+                logger.error(f"{parsed_args.watchDir} directory not found")
+                time.sleep(2)
+            else:
+                logger.error(e)
         except Exception as e:
-            logger.exception(e)
-            exit_flag = True
-        finally:
-            time.sleep(polling_interval)
-    end_time = time.time()
-    run_time = calc_run_time(start_time, end_time)
-    logger.info('{0} dirwatcher.py stopped \n runningtime {1}{2}'
-                .format(banner_text, run_time, banner_text))
+            logger.error(f"UNHANDLED EXCEPTION:{e}")
+        time.sleep(polling_interval)
+    full_time = time.time() - start_time
+    logger.info(
+        '\n'
+        '-------------------------------------------------\n'
+        f'   Stopped {__file__}\n'
+        f'   Uptime was {full_time:.1f}\n'
+        '-------------------------------------------------\n'
+    )
+    logging.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
+    """Runs the main loop until an interrupt like control+c are input."""
     main(sys.argv[1:])
-
-
-    
